@@ -411,6 +411,23 @@ def _apply_player_state(player, data):
     player.is_blocking = data["is_blocking"]
     player.is_gesturing = data["is_gesturing"]
     player.is_moving = data["is_moving"]
+    # Sync attack visualization for remote viewers
+    if player.is_attacking:
+        player.attack_origin_x = player.x
+        player.attack_origin_y = player.y
+        dir_map = {
+            "up": (0.0, -1.0),
+            "down": (0.0, 1.0),
+            "left": (-1.0, 0.0),
+            "right": (1.0, 0.0),
+        }
+        dx, dy = dir_map.get(player.facing_direction, (0.0, 1.0))
+        player.attack_dir_x = dx
+        player.attack_dir_y = dy
+        player.attack_direction = player.facing_direction
+        player.attack_length = player.attack_range * 2.0
+        player.attack_base_half_width = player.attack_range * 0.35
+
     if player.animations:
         if player.is_attacking:
             player.animations.set_animation("attack")
@@ -503,10 +520,13 @@ def run_join_client(host="127.0.0.1"):
             projectiles = []
             for pr in remote.get("projectiles", []):
                 owner = p1 if pr.get("owner") == p1.name else p2
+                anim = None
+                if isinstance(owner, Mage) and hasattr(owner, "_clone_projectile_animation"):
+                    anim = owner._clone_projectile_animation()
                 proj = Projectile(
                     pr["x"], pr["y"], pr["dir_x"], pr["dir_y"],
                     speed=500, damage=1, owner=owner,
-                    color=(200, 180, 120), radius=10, lifetime=2.0, animation=None
+                    color=(120, 200, 255), radius=10, lifetime=2.0, animation=anim
                 )
                 projectiles.append(proj)
         except BlockingIOError:
