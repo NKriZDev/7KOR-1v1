@@ -387,8 +387,18 @@ class Game:
                     "attack_dir_y": getattr(p, "attack_dir_y", 1.0),
                     "attack_origin_x": getattr(p, "attack_origin_x", p.x),
                     "attack_origin_y": getattr(p, "attack_origin_y", p.y),
+                    "shield_angle": getattr(p, "shield_angle", 0.0),
                     "mouse_world_x": getattr(p, "mouse_world_x", p.x),
                     "mouse_world_y": getattr(p, "mouse_world_y", p.y),
+                    "critical_hit_timer": getattr(p, "critical_hit_timer", 0.0),
+                    "critical_border_timer": getattr(p, "critical_border_timer", 0.0),
+                    "critical_text_world_x": getattr(p, "critical_text_world_x", p.x),
+                    "critical_text_world_y": getattr(p, "critical_text_world_y", p.y),
+                    "critical_text_offset_y": getattr(p, "critical_text_offset_y", 0.0),
+                    "shield_block_timer": getattr(p, "shield_block_timer", 0.0),
+                    "shield_text_world_x": getattr(p, "shield_text_world_x", p.x),
+                    "shield_text_world_y": getattr(p, "shield_text_world_y", p.y),
+                    "shield_text_offset_y": getattr(p, "shield_text_offset_y", 0.0),
                     "ui_color": p.ui_color,
                 }
                 for p in self.players
@@ -435,6 +445,16 @@ def _apply_player_state(player, data):
     player.is_moving = data["is_moving"]
     player.mouse_world_x = data.get("mouse_world_x", player.x)
     player.mouse_world_y = data.get("mouse_world_y", player.y)
+    player.shield_angle = data.get("shield_angle", getattr(player, "shield_angle", 0.0))
+    player.critical_hit_timer = data.get("critical_hit_timer", 0.0)
+    player.critical_border_timer = data.get("critical_border_timer", 0.0)
+    player.critical_text_world_x = data.get("critical_text_world_x", player.x)
+    player.critical_text_world_y = data.get("critical_text_world_y", player.y)
+    player.critical_text_offset_y = data.get("critical_text_offset_y", 0.0)
+    player.shield_block_timer = data.get("shield_block_timer", 0.0)
+    player.shield_text_world_x = data.get("shield_text_world_x", player.x)
+    player.shield_text_world_y = data.get("shield_text_world_y", player.y)
+    player.shield_text_offset_y = data.get("shield_text_offset_y", 0.0)
     # Sync attack visualization for remote viewers
     if player.is_attacking:
         player.attack_origin_x = data.get("attack_origin_x", player.x)
@@ -592,6 +612,8 @@ def run_join_client(host="127.0.0.1"):
                 proj.draw(screen, camera)
             for pl in players:
                 pl.draw(screen, camera)
+            for pl in players:
+                pl.draw_critical_effects(screen, camera)
             def draw_bar(player, bar_x):
                 bar_width = 200
                 bar_height = 18
@@ -610,9 +632,6 @@ def run_join_client(host="127.0.0.1"):
             font = pygame.font.Font(None, 24)
             status = font.render("You are the remote player. Arrows move, RCTRL shoot, RSHIFT dash, ALT block (if applicable).", True, (230, 230, 230))
             screen.blit(status, (config.SCREEN_WIDTH // 2 - status.get_width() // 2, 10))
-            # Draw remote aim cursor
-            mx, my = camera.apply(p2.mouse_world_x, p2.mouse_world_y)
-            pygame.draw.circle(screen, (255, 255, 0), (int(mx), int(my)), 6, 2)
 
         pygame.display.flip()
 
