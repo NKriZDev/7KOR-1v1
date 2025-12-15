@@ -4,6 +4,8 @@ import pygame
 import json
 import socket
 import sys
+import requests
+from pathlib import Path
 import config
 from camera import Camera
 from world import GrasslandTile
@@ -13,12 +15,22 @@ from projectile import Projectile
 from mage_client import run_mage_client
 
 
+def _load_version():
+    try:
+        return Path(__file__).with_name("VERSION").read_text(encoding="utf-8").strip() or "0.0.0"
+    except Exception:
+        return "0.0.0"
+
+
+GAME_VERSION = _load_version()
+
+
 class Game:
     """Main game class"""
     
     def __init__(self):
         self.screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
-        pygame.display.set_caption("Roguelike Game - Rostam")
+        pygame.display.set_caption(f"Roguelike Game - Rostam v{GAME_VERSION}")
         self.clock = pygame.time.Clock()
         self.running = True
         self.game_state = "menu"  # "menu", "host_select", "join_menu", "playing"
@@ -41,7 +53,20 @@ class Game:
         self.state_socket.setblocking(False)
         self.state_targets = set()
         self.host_choice = "rogue"  # or "mage"
-        self.join_ip_input = "127.0.0.1"
+        self.join_ip_input = "195.248.240.117"
+        self.lobby_server_url = "http://195.248.240.117:3000"
+        self.advertised_ip_input = "195.248.240.117"
+        self.join_online_code_input = ""
+        self.host_online_status = ""
+        self.join_online_status = ""
+        self.host_online_field = "ip"  # "ip" or "server"
+        self.join_online_field = "code"  # "code" or "server"
+        self.current_lobby_id = None
+        self.using_relay = False
+        self.relay_host = None
+        self.relay_control_port = 40007
+        self.relay_state_port = 40008
+        self.relay_keepalive_timer = 0.0
         # Input tracking per player
         self.input_state = {
             "p1": {"attack": False, "block": False},
@@ -85,35 +110,83 @@ class Game:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN:
-                if self.game_state in ("menu", "host_select", "join_menu"):
-                    if event.key == pygame.K_ESCAPE:
-                        if self.game_state == "menu":
-                            self.running = False
-                        else:
-                            self.game_state = "menu"
-                    elif self.game_state == "menu":
-                        if event.key == pygame.K_h:
-                            self.game_state = "host_select"
-                        elif event.key == pygame.K_j:
-                            self.game_state = "join_menu"
-                    elif self.game_state == "host_select":
-                        if event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_TAB):
-                            self.host_choice = "mage" if self.host_choice == "rogue" else "rogue"
-                        elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                            self.game_state = "playing"
-                            self.reset_game()
-                    elif self.game_state == "join_menu":
-                        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                            run_join_client(self.join_ip_input)
-                        elif event.key == pygame.K_BACKSPACE:
-                            self.join_ip_input = self.join_ip_input[:-1]
-                        else:
-                            ch = event.unicode
-                            if ch.isdigit() or ch == ".":
-                                self.join_ip_input += ch
-                elif self.game_state == "playing":
-                    if event.key == pygame.K_ESCAPE:
+                if event.key == pygame.K_ESCAPE:
+                    if self.game_state == "menu":
+                        self.running = False
+                    else:
                         self.game_state = "menu"
+                elif self.game_state == "menu":
+                    if event.key == pygame.K_h:
+                        self.game_state = "host_select"
+                        self.using_relay = False
+                        self.current_lobby_id = None
+                    elif event.key == pygame.K_j:
+                        self.game_state = "join_menu"
+                        self.using_relay = False
+                        self.current_lobby_id = None
+                    elif event.key == pygame.K_o:
+                        self.game_state = "host_online"
+                        self.host_online_status = ""
+                        self.host_online_field = "ip"
+                        self.current_lobby_id = None
+                    elif event.key == pygame.K_p:
+                        self.game_state = "join_online"
+                        self.join_online_status = ""
+                        self.join_online_field = "code"
+                        self.current_lobby_id = None
+                elif self.game_state == "host_select":
+                    if event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_TAB):
+                        self.host_choice = "mage" if self.host_choice == "rogue" else "rogue"
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        self.game_state = "playing"
+                        self.current_lobby_id = None
+                        self.reset_game()
+                elif self.game_state == "join_menu":
+                    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        run_join_client(self.join_ip_input)
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.join_ip_input = self.join_ip_input[:-1]
+                    else:
+                        ch = event.unicode
+                        if ch.isdigit() or ch == ".":
+                            self.join_ip_input += ch
+                elif self.game_state == "host_online":
+                    if event.key == pygame.K_BACKSPACE:
+                        if self.host_online_field == "ip":
+                            self.advertised_ip_input = self.advertised_ip_input[:-1]
+                        else:
+                            self.lobby_server_url = self.lobby_server_url[:-1]
+                    elif event.key in (pygame.K_TAB, pygame.K_UP, pygame.K_DOWN):
+                        self.host_online_field = "server" if self.host_online_field == "ip" else "ip"
+                    elif event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                        self.host_choice = "mage" if self.host_choice == "rogue" else "rogue"
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        self.create_online_lobby()
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            if self.host_online_field == "ip":
+                                self.advertised_ip_input += ch
+                            else:
+                                self.lobby_server_url += ch
+                elif self.game_state == "join_online":
+                    if event.key == pygame.K_BACKSPACE:
+                        if self.join_online_field == "code":
+                            self.join_online_code_input = self.join_online_code_input[:-1]
+                        else:
+                            self.lobby_server_url = self.lobby_server_url[:-1]
+                    elif event.key in (pygame.K_TAB, pygame.K_UP, pygame.K_DOWN):
+                        self.join_online_field = "server" if self.join_online_field == "code" else "code"
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        self.join_online_lobby()
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            if self.join_online_field == "code":
+                                self.join_online_code_input += ch
+                            else:
+                                self.lobby_server_url += ch
+                elif self.game_state == "playing":
                     if event.key in (pygame.K_RCTRL, pygame.K_LCTRL, pygame.K_KP0):
                         self.input_state["p2"]["attack"] = True
                     if event.key == pygame.K_RSHIFT:
@@ -134,6 +207,8 @@ class Game:
         """Update game state"""
         if self.game_state != "playing":
             return
+        if self.using_relay and self.current_lobby_id:
+            self.tick_relay(dt)
         
         self.poll_remote_input()
         self.poll_state_clients()
@@ -223,6 +298,10 @@ class Game:
             self.draw_host_menu()
         elif self.game_state == "join_menu":
             self.draw_join_menu()
+        elif self.game_state == "host_online":
+            self.draw_host_online_menu()
+        elif self.game_state == "join_online":
+            self.draw_join_online_menu()
         else:
             self.draw_game()
         
@@ -246,14 +325,25 @@ class Game:
         join_rect = join_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 40))
         self.screen.blit(join_text, join_rect)
 
+        online_host = font.render("Press O to Host Online", True, (200, 230, 230))
+        online_host_rect = online_host.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 80))
+        self.screen.blit(online_host, online_host_rect)
+
+        online_join = font.render("Press P to Join Online", True, (200, 230, 230))
+        online_join_rect = online_join.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 120))
+        self.screen.blit(online_join, online_join_rect)
+
         esc_text = font.render("Press ESC to Quit", True, (200, 200, 200))
-        esc_rect = esc_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 80))
+        esc_rect = esc_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 170))
         self.screen.blit(esc_text, esc_rect)
         
         if self.last_winner:
             win_text = font.render(f"Last winner: {self.last_winner}", True, (220, 220, 80))
             win_rect = win_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 140))
             self.screen.blit(win_text, win_rect)
+        version_font = pygame.font.Font(None, 24)
+        version_text = version_font.render(f"v{GAME_VERSION}", True, (180, 180, 180))
+        self.screen.blit(version_text, (10, config.SCREEN_HEIGHT - 30))
 
     def draw_host_menu(self):
         font = pygame.font.Font(None, 52)
@@ -281,6 +371,64 @@ class Game:
         self.screen.blit(ip_text, (box_rect.x + 10, box_rect.y + 10))
         hint = font_small.render("Type IP, ENTER to connect, ESC to cancel", True, (200, 200, 200))
         self.screen.blit(hint, (config.SCREEN_WIDTH // 2 - hint.get_width() // 2, 330))
+
+    def draw_host_online_menu(self):
+        font = pygame.font.Font(None, 52)
+        title = font.render("Host Online", True, (255, 255, 255))
+        self.screen.blit(title, (config.SCREEN_WIDTH // 2 - title.get_width() // 2, 90))
+        font_small = pygame.font.Font(None, 32)
+        hero = font_small.render(f"Your hero: {self.host_choice.title()}  (LEFT/RIGHT to toggle)", True, (220, 220, 220))
+        self.screen.blit(hero, (config.SCREEN_WIDTH // 2 - hero.get_width() // 2, 150))
+
+        ip_label = font_small.render("Advertised IP (what others connect to):", True, (200, 200, 200))
+        self.screen.blit(ip_label, (config.SCREEN_WIDTH // 2 - ip_label.get_width() // 2, 210))
+        ip_box = pygame.Rect(config.SCREEN_WIDTH // 2 - 260, 245, 520, 44)
+        pygame.draw.rect(self.screen, (40, 40, 60), ip_box)
+        pygame.draw.rect(self.screen, (230, 230, 120) if self.host_online_field == "ip" else (200, 200, 200), ip_box, 2)
+        ip_text = font_small.render(self.advertised_ip_input or " ", True, (255, 255, 0))
+        self.screen.blit(ip_text, (ip_box.x + 10, ip_box.y + 8))
+
+        srv_label = font_small.render("Lobby server URL:", True, (200, 200, 200))
+        self.screen.blit(srv_label, (config.SCREEN_WIDTH // 2 - srv_label.get_width() // 2, 305))
+        srv_box = pygame.Rect(config.SCREEN_WIDTH // 2 - 260, 340, 520, 44)
+        pygame.draw.rect(self.screen, (40, 40, 60), srv_box)
+        pygame.draw.rect(self.screen, (230, 230, 120) if self.host_online_field == "server" else (200, 200, 200), srv_box, 2)
+        srv_text = font_small.render(self.lobby_server_url or " ", True, (200, 255, 255))
+        self.screen.blit(srv_text, (srv_box.x + 10, srv_box.y + 8))
+
+        hint = font_small.render("TAB to switch field, ENTER to create lobby & start, ESC to cancel", True, (200, 200, 200))
+        self.screen.blit(hint, (config.SCREEN_WIDTH // 2 - hint.get_width() // 2, 400))
+        if self.host_online_status:
+            status = font_small.render(self.host_online_status, True, (220, 180, 120))
+            self.screen.blit(status, (config.SCREEN_WIDTH // 2 - status.get_width() // 2, 450))
+
+    def draw_join_online_menu(self):
+        font = pygame.font.Font(None, 52)
+        title = font.render("Join Online", True, (255, 255, 255))
+        self.screen.blit(title, (config.SCREEN_WIDTH // 2 - title.get_width() // 2, 90))
+        font_small = pygame.font.Font(None, 32)
+
+        code_label = font_small.render("Lobby code:", True, (200, 200, 200))
+        self.screen.blit(code_label, (config.SCREEN_WIDTH // 2 - code_label.get_width() // 2, 170))
+        code_box = pygame.Rect(config.SCREEN_WIDTH // 2 - 200, 205, 400, 44)
+        pygame.draw.rect(self.screen, (40, 40, 60), code_box)
+        pygame.draw.rect(self.screen, (230, 230, 120) if self.join_online_field == "code" else (200, 200, 200), code_box, 2)
+        code_text = font_small.render(self.join_online_code_input or " ", True, (255, 255, 0))
+        self.screen.blit(code_text, (code_box.x + 10, code_box.y + 8))
+
+        srv_label = font_small.render("Lobby server URL:", True, (200, 200, 200))
+        self.screen.blit(srv_label, (config.SCREEN_WIDTH // 2 - srv_label.get_width() // 2, 270))
+        srv_box = pygame.Rect(config.SCREEN_WIDTH // 2 - 260, 305, 520, 44)
+        pygame.draw.rect(self.screen, (40, 40, 60), srv_box)
+        pygame.draw.rect(self.screen, (230, 230, 120) if self.join_online_field == "server" else (200, 200, 200), srv_box, 2)
+        srv_text = font_small.render(self.lobby_server_url or " ", True, (200, 255, 255))
+        self.screen.blit(srv_text, (srv_box.x + 10, srv_box.y + 8))
+
+        hint = font_small.render("TAB to switch field, ENTER to join, ESC to cancel", True, (200, 200, 200))
+        self.screen.blit(hint, (config.SCREEN_WIDTH // 2 - hint.get_width() // 2, 360))
+        if self.join_online_status:
+            status = font_small.render(self.join_online_status, True, (220, 180, 120))
+            self.screen.blit(status, (config.SCREEN_WIDTH // 2 - status.get_width() // 2, 410))
     
     def draw_game(self):
         """Draw game screen"""
@@ -324,6 +472,11 @@ class Game:
             font = pygame.font.Font(None, 24)
             info_text = font.render("Remote mage connected", True, (120, 220, 120))
             self.screen.blit(info_text, (config.SCREEN_WIDTH // 2 - info_text.get_width() // 2, 10))
+        if self.current_lobby_id:
+            font = pygame.font.Font(None, 24)
+            label = f"Lobby {self.current_lobby_id} | Share IP: {self.advertised_ip_input}"
+            lobby_text = font.render(label, True, (220, 220, 120))
+            self.screen.blit(lobby_text, (config.SCREEN_WIDTH // 2 - lobby_text.get_width() // 2, 36))
     
     def draw_player_ui(self, player, bar_x, bar_y):
         """Draw a simple health bar for a player at a given screen position."""
@@ -338,6 +491,88 @@ class Game:
         font = pygame.font.Font(None, 22)
         label = font.render(f"{player.name}  {int(player.health)}/{int(player.max_health)}", True, (230, 230, 230))
         self.screen.blit(label, (bar_x, bar_y - 22))
+
+    def create_online_lobby(self):
+        """Create a lobby on the backend server and start hosting the match."""
+        base_url = (self.lobby_server_url or "").rstrip("/")
+        if not base_url:
+            self.host_online_status = "Lobby server URL required."
+            return
+        payload = {
+            "host_ip": self.advertised_ip_input.strip() or None,
+            "control_port": 50007,
+            "state_port": 50008,
+            "host_choice": self.host_choice,
+        }
+        try:
+            resp = requests.post(f"{base_url}/lobbies", json=payload, timeout=4)
+            if resp.status_code >= 400:
+                self.host_online_status = f"Server error: {resp.status_code}"
+                return
+            data = resp.json()
+            lobby_id = data.get("id") or data.get("lobbyId")
+            if not lobby_id:
+                self.host_online_status = "No lobby id returned."
+                return
+            self.relay_host = data.get("relay_host") or self._extract_host_from_base(self.lobby_server_url)
+            self.relay_control_port = data.get("relay_control_port", self.relay_control_port)
+            self.relay_state_port = data.get("relay_state_port", self.relay_state_port)
+            self.using_relay = bool(self.relay_host)
+            self.current_lobby_id = lobby_id
+            self.host_online_status = f"Lobby {lobby_id} created. Share code + IP {self.advertised_ip_input}"
+            self.game_state = "playing"
+            self.reset_game()
+        except requests.RequestException as exc:
+            self.host_online_status = f"Network error: {exc}"
+
+    def join_online_lobby(self):
+        """Fetch lobby info from backend and connect as client."""
+        code = (self.join_online_code_input or "").strip().lower()
+        if not code:
+            self.join_online_status = "Lobby code is required."
+            return
+        base_url = (self.lobby_server_url or "").rstrip("/")
+        if not base_url:
+            self.join_online_status = "Lobby server URL required."
+            return
+        try:
+            resp = requests.get(f"{base_url}/lobbies/{code}", timeout=4)
+            if resp.status_code == 404:
+                self.join_online_status = "Lobby not found or expired."
+                return
+            if resp.status_code >= 400:
+                self.join_online_status = f"Server error: {resp.status_code}"
+                return
+            data = resp.json()
+            host_ip = data.get("host_ip") or data.get("hostIp") or data.get("host")
+            if not host_ip:
+                self.join_online_status = "Lobby missing host IP."
+                return
+            self.join_online_status = f"Connecting to {host_ip} ..."
+            self.join_ip_input = host_ip
+            relay_host = data.get("relay_host") or self._extract_host_from_base(self.lobby_server_url)
+            relay_control_port = data.get("relay_control_port", 50007)
+            relay_state_port = data.get("relay_state_port", 50008)
+            use_relay = bool(relay_host)
+            run_join_client(
+                host_ip,
+                lobby_id=code,
+                relay_host=relay_host if use_relay else None,
+                relay_control_port=relay_control_port,
+                relay_state_port=relay_state_port,
+            )
+            # When client window closes, return to main menu
+            self.game_state = "menu"
+        except requests.RequestException as exc:
+            self.join_online_status = f"Network error: {exc}"
+
+    def _extract_host_from_base(self, base_url):
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(base_url)
+            return parsed.hostname
+        except Exception:
+            return None
 
     def poll_remote_input(self):
         """Receive remote mage input via UDP (localhost LAN)."""
@@ -365,8 +600,6 @@ class Game:
 
     def broadcast_state(self):
         """Send lightweight game state to connected clients."""
-        if not self.state_targets:
-            return
         state = {
             "game_state": self.game_state,
             "last_winner": self.last_winner,
@@ -414,12 +647,46 @@ class Game:
                 for proj in self.projectiles
             ],
         }
-        payload = json.dumps(state).encode("utf-8")
-        for addr in list(self.state_targets):
+        if self.state_targets:
+            payload = json.dumps(state).encode("utf-8")
+            for addr in list(self.state_targets):
+                try:
+                    self.state_socket.sendto(payload, addr)
+                except OSError:
+                    self.state_targets.discard(addr)
+        if self.using_relay and self.current_lobby_id and self.relay_host:
+            self.broadcast_state_via_relay(state)
+
+    def tick_relay(self, dt):
+        """Keep relay registration alive so the server can forward packets."""
+        if not self.relay_host:
+            return
+        self.relay_keepalive_timer += dt
+        if self.relay_keepalive_timer >= 1.5:
+            self.relay_keepalive_timer = 0.0
             try:
-                self.state_socket.sendto(payload, addr)
+                reg = {"lobby": self.current_lobby_id, "role": "host", "kind": "control", "type": "register"}
+                self.udp_socket.sendto(json.dumps(reg).encode("utf-8"), (self.relay_host, self.relay_control_port))
             except OSError:
-                self.state_targets.discard(addr)
+                pass
+            try:
+                reg_state = {"lobby": self.current_lobby_id, "role": "host", "kind": "state", "type": "register"}
+                self.state_socket.sendto(json.dumps(reg_state).encode("utf-8"), (self.relay_host, self.relay_state_port))
+            except OSError:
+                pass
+
+    def broadcast_state_via_relay(self, state):
+        """Send state to relay server which forwards to clients."""
+        envelope = {
+            "lobby": self.current_lobby_id,
+            "role": "host",
+            "kind": "state",
+            "payload": state,
+        }
+        try:
+            self.state_socket.sendto(json.dumps(envelope).encode("utf-8"), (self.relay_host, self.relay_state_port))
+        except OSError:
+            pass
 
     def run(self):
         """Main game loop for the host instance."""
@@ -488,7 +755,7 @@ def _apply_player_state(player, data):
             player.animations.set_animation("idle")
 
 
-def run_join_client(host="127.0.0.1"):
+def run_join_client(host="127.0.0.1", lobby_id=None, relay_host=None, relay_control_port=40007, relay_state_port=40008):
     pygame.display.set_caption("7KOR - Join")
     screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
     clock = pygame.time.Clock()
@@ -502,8 +769,17 @@ def run_join_client(host="127.0.0.1"):
     state_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     state_sock.bind(("", 0))
     state_sock.setblocking(False)
-    state_sock.sendto(b"hello", (host, 50008))
     control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    control_dest = (relay_host, relay_control_port) if relay_host else (host, 50007)
+    state_dest = (relay_host, relay_state_port) if relay_host else (host, 50008)
+    if relay_host:
+        try:
+            reg = {"lobby": lobby_id or "", "role": "client", "kind": "state", "type": "register"}
+            state_sock.sendto(json.dumps(reg).encode("utf-8"), state_dest)
+        except OSError:
+            pass
+    else:
+        state_sock.sendto(b"hello", state_dest)
     game_state = "menu"
     last_winner = None
     running = True
@@ -551,7 +827,11 @@ def run_join_client(host="127.0.0.1"):
             "mouse_y": mouse_y,
         }
         try:
-            control_sock.sendto(json.dumps(payload).encode("utf-8"), (host, 50007))
+            if relay_host:
+                envelope = {"lobby": lobby_id or "", "role": "client", "kind": "control", "payload": payload}
+                control_sock.sendto(json.dumps(envelope).encode("utf-8"), control_dest)
+            else:
+                control_sock.sendto(json.dumps(payload).encode("utf-8"), control_dest)
         except OSError:
             pass
 
