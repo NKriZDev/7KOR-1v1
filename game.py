@@ -147,10 +147,22 @@ class Game:
         if self.remote_input:
             self.input_state["p2"]["attack"] = self.remote_input.get("attack", False)
             self.input_state["p2"]["block"] = self.remote_input.get("block", False)
+        p2_mouse_world = None
+        if self.remote_input and "mouse_x" in self.remote_input and "mouse_y" in self.remote_input:
+            mx = self.remote_input.get("mouse_x", config.SCREEN_WIDTH // 2)
+            my = self.remote_input.get("mouse_y", config.SCREEN_HEIGHT // 2)
+            p2_mouse_world = self.camera.screen_to_world(mx, my)
         
         # Update players
         spawned1 = self.player1.update(dt, keys, self.input_state["p1"]["attack"], (mouse_world_x, mouse_world_y), self.input_state["p1"]["block"])
-        spawned2 = self.player2.update(dt, keys, self.input_state["p2"]["attack"], None, self.input_state["p2"]["block"], direct_input=p2_direct)
+        spawned2 = self.player2.update(
+            dt,
+            keys,
+            self.input_state["p2"]["attack"],
+            p2_mouse_world,
+            self.input_state["p2"]["block"],
+            direct_input=p2_direct,
+        )
         self.projectiles.extend(spawned1)
         self.projectiles.extend(spawned2)
         # Reset one-shot attack flags
@@ -471,27 +483,44 @@ def run_join_client(host="127.0.0.1"):
         dt = clock.tick(config.FPS) / 1000.0
         attack_click = False
         gesture_click = False
+        left_down = False
+        right_down = False
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                if event.key in (pygame.K_RCTRL, pygame.K_LCTRL, pygame.K_KP0):
-                    attack_click = True
-                if event.key == pygame.K_SLASH:
+                if event.key == pygame.K_g:
                     gesture_click = True
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    attack_click = True
+                    left_down = True
+                if event.button == 3:
+                    right_down = True
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:
+                    left_down = False
+                if event.button == 3:
+                    right_down = False
 
         keys = pygame.key.get_pressed()
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        mouse_buttons = pygame.mouse.get_pressed()
+        left_down = left_down or mouse_buttons[0]
+        right_down = right_down or mouse_buttons[2]
         payload = {
-            "up": keys[pygame.K_UP],
-            "down": keys[pygame.K_DOWN],
-            "left": keys[pygame.K_LEFT],
-            "right": keys[pygame.K_RIGHT],
-            "dash": keys[pygame.K_RSHIFT],
-            "block": keys[pygame.K_RALT] or keys[pygame.K_LALT],
-            "attack": attack_click,
+            "up": keys[pygame.K_w],
+            "down": keys[pygame.K_s],
+            "left": keys[pygame.K_a],
+            "right": keys[pygame.K_d],
+            "dash": keys[pygame.K_SPACE],
+            "block": right_down,
+            "attack": attack_click or left_down,
             "gesture": gesture_click,
+            "mouse_x": mouse_x,
+            "mouse_y": mouse_y,
         }
         try:
             control_sock.sendto(json.dumps(payload).encode("utf-8"), (host, 50007))
