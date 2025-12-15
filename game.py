@@ -103,7 +103,7 @@ class Game:
                             self.game_state = "playing"
                             self.reset_game()
                     elif self.game_state == "join_menu":
-                        if event.key == pygame.K_RETURN:
+                        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                             run_join_client(self.join_ip_input)
                         elif event.key == pygame.K_BACKSPACE:
                             self.join_ip_input = self.join_ip_input[:-1]
@@ -163,6 +163,10 @@ class Game:
             self.input_state["p2"]["block"],
             direct_input=p2_direct,
         )
+        # Persist mouse world for broadcast
+        self.player1.mouse_world_x, self.player1.mouse_world_y = mouse_world_x, mouse_world_y
+        if p2_mouse_world:
+            self.player2.mouse_world_x, self.player2.mouse_world_y = p2_mouse_world
         self.projectiles.extend(spawned1)
         self.projectiles.extend(spawned2)
         # Reset one-shot attack flags
@@ -383,6 +387,8 @@ class Game:
                     "attack_dir_y": getattr(p, "attack_dir_y", 1.0),
                     "attack_origin_x": getattr(p, "attack_origin_x", p.x),
                     "attack_origin_y": getattr(p, "attack_origin_y", p.y),
+                    "mouse_world_x": getattr(p, "mouse_world_x", p.x),
+                    "mouse_world_y": getattr(p, "mouse_world_y", p.y),
                     "ui_color": p.ui_color,
                 }
                 for p in self.players
@@ -427,6 +433,8 @@ def _apply_player_state(player, data):
     player.is_blocking = data["is_blocking"]
     player.is_gesturing = data["is_gesturing"]
     player.is_moving = data["is_moving"]
+    player.mouse_world_x = data.get("mouse_world_x", player.x)
+    player.mouse_world_y = data.get("mouse_world_y", player.y)
     # Sync attack visualization for remote viewers
     if player.is_attacking:
         player.attack_origin_x = data.get("attack_origin_x", player.x)
@@ -565,7 +573,8 @@ def run_join_client(host="127.0.0.1"):
                     color=(120, 200, 255), radius=10, lifetime=2.0, animation=anim
                 )
                 projectiles.append(proj)
-        except BlockingIOError:
+        except (BlockingIOError, ConnectionResetError, ConnectionAbortedError, OSError):
+            # Ignore transient socket errors on client
             pass
 
         for pl in players:
@@ -601,6 +610,9 @@ def run_join_client(host="127.0.0.1"):
             font = pygame.font.Font(None, 24)
             status = font.render("You are the remote player. Arrows move, RCTRL shoot, RSHIFT dash, ALT block (if applicable).", True, (230, 230, 230))
             screen.blit(status, (config.SCREEN_WIDTH // 2 - status.get_width() // 2, 10))
+            # Draw remote aim cursor
+            mx, my = camera.apply(p2.mouse_world_x, p2.mouse_world_y)
+            pygame.draw.circle(screen, (255, 255, 0), (int(mx), int(my)), 6, 2)
 
         pygame.display.flip()
 
