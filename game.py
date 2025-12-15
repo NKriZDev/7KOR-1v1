@@ -579,10 +579,15 @@ def run_join_client(host="127.0.0.1"):
             screen.blit(txt, (config.SCREEN_WIDTH // 2 - txt.get_width() // 2, config.SCREEN_HEIGHT // 2))
         else:
             grass.draw(screen, camera)
-            for proj in projectiles:
-                proj.draw(screen, camera)
-            for pl in players:
-                pl.draw(screen, camera)
+        for proj in projectiles:
+            proj.draw(screen, camera)
+        for pl in players:
+            pl.draw(screen, camera)
+            # Draw client mouse cursor if available
+            if pl is p2 and "mouse_x" in remote:
+                mx = remote.get("mouse_x", config.SCREEN_WIDTH // 2)
+                my = remote.get("mouse_y", config.SCREEN_HEIGHT // 2)
+                pygame.draw.circle(screen, (255, 255, 0), (mx, my), 6, 2)
             def draw_bar(player, bar_x):
                 bar_width = 200
                 bar_height = 18
