@@ -926,8 +926,8 @@ class Player:
             text_rect = main_text.get_rect(center=(screen_x, screen_y))
             screen.blit(main_text, text_rect)
         
-        # Draw gradient red borders (like shooter games)
-        if self.critical_border_timer > 0:
+        # Draw gradient red borders (like shooter games) only for the local player
+        if self.critical_border_timer > 0 and getattr(self, "is_local_player", False):
             border_thickness = 30
             fade_distance = 50  # Distance for gradient fade
             
