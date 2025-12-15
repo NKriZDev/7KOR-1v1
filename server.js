@@ -60,6 +60,9 @@ app.post("/lobbies", (req, res) => {
   const controlPort = (req.body && req.body.control_port) || 50007;
   const statePort = (req.body && req.body.state_port) || 50008;
   const hostChoice = (req.body && req.body.host_choice) || "rogue";
+  const relayHost = advertisedHost(req);
+  const relayControlPort = RELAY_CONTROL_PORT;
+  const relayStatePort = RELAY_STATE_PORT;
   if (!hostIp) {
     return res.status(400).json({ error: "host_ip is required" });
   }
@@ -69,6 +72,9 @@ app.post("/lobbies", (req, res) => {
     control_port: controlPort,
     state_port: statePort,
     host_choice: hostChoice,
+    relay_host: relayHost,
+    relay_control_port: relayControlPort,
+    relay_state_port: relayStatePort,
     created_at: nowSeconds(),
   });
   res.json({
@@ -77,9 +83,9 @@ app.post("/lobbies", (req, res) => {
     control_port: controlPort,
     state_port: statePort,
     host_choice: hostChoice,
-    relay_host: advertisedHost(req),
-    relay_control_port: RELAY_CONTROL_PORT,
-    relay_state_port: RELAY_STATE_PORT,
+    relay_host: relayHost,
+    relay_control_port: relayControlPort,
+    relay_state_port: relayStatePort,
   });
 });
 
@@ -92,7 +98,15 @@ app.get("/lobbies/:id", (req, res) => {
     lobbies.delete(req.params.id);
     return res.status(404).json({ error: "expired" });
   }
-  res.json(lobby);
+  const relayHost = lobby.relay_host || PUBLIC_HOST || advertisedHost(req);
+  const relayControlPort = lobby.relay_control_port || RELAY_CONTROL_PORT;
+  const relayStatePort = lobby.relay_state_port || RELAY_STATE_PORT;
+  res.json({
+    ...lobby,
+    relay_host: relayHost,
+    relay_control_port: relayControlPort,
+    relay_state_port: relayStatePort,
+  });
 });
 
 app.delete("/lobbies/:id", (req, res) => {

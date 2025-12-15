@@ -551,8 +551,8 @@ class Game:
             self.join_online_status = f"Connecting to {host_ip} ..."
             self.join_ip_input = host_ip
             relay_host = data.get("relay_host") or self._extract_host_from_base(self.lobby_server_url)
-            relay_control_port = data.get("relay_control_port", 50007)
-            relay_state_port = data.get("relay_state_port", 50008)
+            relay_control_port = data.get("relay_control_port", 40007)
+            relay_state_port = data.get("relay_state_port", 40008)
             use_relay = bool(relay_host)
             run_join_client(
                 host_ip,
