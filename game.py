@@ -222,18 +222,22 @@ class Game:
         
         # Instructions
         font = pygame.font.Font(None, 36)
-        start_text = font.render("Press SPACE or ENTER to Start", True, (200, 200, 200))
-        start_rect = start_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2))
-        self.screen.blit(start_text, start_rect)
+        host_text = font.render("Press H to Host", True, (200, 200, 200))
+        host_rect = host_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2))
+        self.screen.blit(host_text, host_rect)
         
+        join_text = font.render("Press J to Join", True, (200, 200, 200))
+        join_rect = join_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 40))
+        self.screen.blit(join_text, join_rect)
+
         esc_text = font.render("Press ESC to Quit", True, (200, 200, 200))
-        esc_rect = esc_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 50))
+        esc_rect = esc_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 80))
         self.screen.blit(esc_text, esc_rect)
         
         if self.last_winner:
             win_text = font.render(f"Last winner: {self.last_winner}", True, (220, 220, 80))
-            win_rect = win_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 110))
-        self.screen.blit(win_text, win_rect)
+            win_rect = win_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 140))
+            self.screen.blit(win_text, win_rect)
 
     def draw_host_menu(self):
         font = pygame.font.Font(None, 52)
@@ -385,6 +389,15 @@ class Game:
             except OSError:
                 self.state_targets.discard(addr)
 
+    def run(self):
+        """Main game loop for the host instance."""
+        while self.running:
+            dt = self.clock.tick(config.FPS) / 1000.0
+            self.handle_events()
+            self.update(dt)
+            self.draw()
+        pygame.quit()
+
 
 # Helpers for client rendering
 def _apply_player_state(player, data):
@@ -520,19 +533,6 @@ def run_join_client(host="127.0.0.1"):
             screen.blit(status, (config.SCREEN_WIDTH // 2 - status.get_width() // 2, 10))
 
         pygame.display.flip()
-
-    
-    def run(self):
-        """Main game loop"""
-        while self.running:
-            dt = self.clock.tick(config.FPS) / 1000.0  # Delta time in seconds
-            
-            self.handle_events()
-            self.update(dt)
-            self.draw()
-        
-        pygame.quit()
-
 
 if __name__ == "__main__":
     pygame.init()
