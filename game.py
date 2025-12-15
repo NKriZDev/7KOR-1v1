@@ -36,6 +36,10 @@ class Game:
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.bind(("", 50007))
         self.udp_socket.setblocking(False)
+        self.state_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.state_socket.bind(("", 50008))
+        self.state_socket.setblocking(False)
+        self.state_targets = set()
         # Input tracking per player
         self.input_state = {
             "p1": {"attack": False, "block": False},
@@ -107,6 +111,7 @@ class Game:
             return
         
         self.poll_remote_input()
+        self.poll_state_clients()
         
         keys = pygame.key.get_pressed()
         mouse_buttons = pygame.mouse.get_pressed()
@@ -163,6 +168,8 @@ class Game:
         if winner:
             self.last_winner = winner.name
             self.game_state = "menu"
+        
+        self.broadcast_state()
     
     def draw(self):
         """Draw everything"""
@@ -268,6 +275,60 @@ class Game:
         except BlockingIOError:
             pass
 
+    def poll_state_clients(self):
+        """Register spectators requesting state sync."""
+        if not self.state_socket:
+            return
+        while True:
+            try:
+                data, addr = self.state_socket.recvfrom(512)
+                if data:
+                    self.state_targets.add(addr)
+            except BlockingIOError:
+                break
+
+    def broadcast_state(self):
+        """Send lightweight game state to connected clients."""
+        if not self.state_targets:
+            return
+        state = {
+            "game_state": self.game_state,
+            "last_winner": self.last_winner,
+            "camera": {"x": self.camera.x, "y": self.camera.y},
+            "players": [
+                {
+                    "name": p.name,
+                    "x": p.x,
+                    "y": p.y,
+                    "health": p.health,
+                    "max_health": p.max_health,
+                    "facing": p.facing_direction,
+                    "is_attacking": p.is_attacking,
+                    "is_blocking": p.is_blocking,
+                    "is_gesturing": p.is_gesturing,
+                    "is_moving": p.is_moving,
+                    "ui_color": p.ui_color,
+                }
+                for p in self.players
+            ],
+            "projectiles": [
+                {
+                    "x": proj.x,
+                    "y": proj.y,
+                    "dir_x": proj.dir_x,
+                    "dir_y": proj.dir_y,
+                    "owner": proj.owner.name if proj.owner else "",
+                }
+                for proj in self.projectiles
+            ],
+        }
+        payload = json.dumps(state).encode("utf-8")
+        for addr in list(self.state_targets):
+            try:
+                self.state_socket.sendto(payload, addr)
+            except OSError:
+                self.state_targets.discard(addr)
+
     
     def run(self):
         """Main game loop"""
@@ -289,6 +350,13 @@ if __name__ == "__main__":
         if idx + 1 < len(sys.argv):
             host = sys.argv[idx + 1]
         run_mage_client(host)
+    elif "--client" in sys.argv:
+        idx = sys.argv.index("--client")
+        host = "127.0.0.1"
+        if idx + 1 < len(sys.argv):
+            host = sys.argv[idx + 1]
+        from spectator_client import run_spectator
+        run_spectator(host)
     else:
         game = Game()
         game.run()
