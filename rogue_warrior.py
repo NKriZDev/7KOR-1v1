@@ -6,6 +6,7 @@ import config
 from player import Player, SimpleAnimationManager
 from animation import Animation
 from file_animation import load_animation_from_folder
+from asset_utils import asset_path
 
 
 class RogueWarrior(Player):
@@ -30,7 +31,7 @@ class RogueWarrior(Player):
 
     def _build_animations(self):
         """Load hero animations from disk."""
-        base_path = "Assets/Player/rogue_warrior"
+        base_path = asset_path("Assets/Player/rogue_warrior")
         animations_dict = {}
 
         idle_anim = load_animation_from_folder(

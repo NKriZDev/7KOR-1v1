@@ -4,6 +4,7 @@ import pygame
 import os
 import glob
 from animation import Animation
+from asset_utils import asset_path
 
 
 class FileAnimationManager:
@@ -26,8 +27,9 @@ class FileAnimationManager:
         for anim_name, file_paths in animations_config.items():
             frames = []
             for file_path in file_paths:
+                resolved = asset_path(file_path)
                 try:
-                    frame = pygame.image.load(file_path).convert_alpha()
+                    frame = pygame.image.load(resolved).convert_alpha()
                     # Scale if needed
                     if self.scale != 1.0:
                         new_width = int(frame.get_width() * self.scale)
@@ -86,9 +88,10 @@ def load_animation_from_folder(folder_path, prefix, num_frames, scale=1.0, durat
         duration: Frame duration
         loop: Whether to loop
     """
+    folder = asset_path(folder_path)
     frames = []
     for i in range(1, num_frames + 1):
-        file_path = os.path.join(folder_path, f"{prefix}-{i}.png")
+        file_path = os.path.join(folder, f"{prefix}-{i}.png")
         try:
             frame = pygame.image.load(file_path).convert_alpha()
             if scale != 1.0:
@@ -98,7 +101,7 @@ def load_animation_from_folder(folder_path, prefix, num_frames, scale=1.0, durat
             frames.append(frame)
         except (pygame.error, FileNotFoundError, OSError):
             # Try alternative naming (without dash)
-            file_path = os.path.join(folder_path, f"{prefix}{i}.png")
+            file_path = os.path.join(folder, f"{prefix}{i}.png")
             try:
                 frame = pygame.image.load(file_path).convert_alpha()
                 if scale != 1.0:
@@ -113,4 +116,3 @@ def load_animation_from_folder(folder_path, prefix, num_frames, scale=1.0, durat
                 frames.append(placeholder)
     
     return Animation(frames, duration, loop) if frames else None
-

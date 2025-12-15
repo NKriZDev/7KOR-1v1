@@ -39,6 +39,8 @@ jobs:
       - name: Build executable (PyInstaller)
         run: |
           pyinstaller --noconfirm --onefile --name 7kor-1v1 --add-data "Assets;Assets" game.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

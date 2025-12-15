@@ -1,6 +1,7 @@
 """Animation system for sprite sheets"""
 
 import pygame
+from asset_utils import asset_path
 
 
 class Animation:
@@ -69,7 +70,8 @@ class AnimationManager:
         """
         # Load sprite sheet
         try:
-            self.sprite_sheet = pygame.image.load(sprite_sheet_path).convert_alpha()
+            resolved = asset_path(sprite_sheet_path)
+            self.sprite_sheet = pygame.image.load(resolved).convert_alpha()
         except pygame.error as e:
             print(f"Error loading sprite sheet: {e}")
             # Create placeholder
@@ -148,4 +150,3 @@ class AnimationManager:
     def get_animation_names(self):
         """Get list of available animation names"""
         return list(self.animations.keys())
-

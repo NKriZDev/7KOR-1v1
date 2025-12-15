@@ -6,6 +6,7 @@ import random
 import math
 import config
 from file_animation import load_animation_from_folder
+from asset_utils import asset_path
 
 
 class HellGato:
@@ -92,7 +93,7 @@ class HellGato:
         
         # Load walking animation from individual PNG files (4 frames)
         # Frames: 1-2 = walk, 3 = lock-on, 4 = lunge
-        base_path = "Assets/Enemy/hell-gato"
+        base_path = asset_path("Assets/Enemy/hell-gato")
         walk_frames = []
         for i in range(1, 5):
             file_path = os.path.join(base_path, f"hell-gato-{i}.png")
@@ -117,7 +118,7 @@ class HellGato:
         self.walk_frames = walk_frames
         
         # Load death animation
-        death_base_path = "Assets/Effects/enemy-death"
+        death_base_path = asset_path("Assets/Effects/enemy-death")
         death_anim = load_animation_from_folder(
             death_base_path,
             "enemy-death",
@@ -128,7 +129,7 @@ class HellGato:
         )
         
         # Load rise animation
-        rise_base_path = "Assets/Effects/hell-gato-rise"
+        rise_base_path = asset_path("Assets/Effects/hell-gato-rise")
         rise_anim = load_animation_from_folder(
             rise_base_path,
             "hell-gato-rise",
