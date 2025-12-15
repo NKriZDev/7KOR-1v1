@@ -367,6 +367,10 @@ class Game:
                     "is_blocking": p.is_blocking,
                     "is_gesturing": p.is_gesturing,
                     "is_moving": p.is_moving,
+                    "attack_dir_x": getattr(p, "attack_dir_x", 0.0),
+                    "attack_dir_y": getattr(p, "attack_dir_y", 1.0),
+                    "attack_origin_x": getattr(p, "attack_origin_x", p.x),
+                    "attack_origin_y": getattr(p, "attack_origin_y", p.y),
                     "ui_color": p.ui_color,
                 }
                 for p in self.players
@@ -413,15 +417,18 @@ def _apply_player_state(player, data):
     player.is_moving = data["is_moving"]
     # Sync attack visualization for remote viewers
     if player.is_attacking:
-        player.attack_origin_x = player.x
-        player.attack_origin_y = player.y
-        dir_map = {
-            "up": (0.0, -1.0),
-            "down": (0.0, 1.0),
-            "left": (-1.0, 0.0),
-            "right": (1.0, 0.0),
-        }
-        dx, dy = dir_map.get(player.facing_direction, (0.0, 1.0))
+        player.attack_origin_x = data.get("attack_origin_x", player.x)
+        player.attack_origin_y = data.get("attack_origin_y", player.y)
+        dx = data.get("attack_dir_x", 0.0)
+        dy = data.get("attack_dir_y", 1.0)
+        if dx == 0 and dy == 0:
+            dir_map = {
+                "up": (0.0, -1.0),
+                "down": (0.0, 1.0),
+                "left": (-1.0, 0.0),
+                "right": (1.0, 0.0),
+            }
+            dx, dy = dir_map.get(player.facing_direction, (0.0, 1.0))
         player.attack_dir_x = dx
         player.attack_dir_y = dy
         player.attack_direction = player.facing_direction
