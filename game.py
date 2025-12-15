@@ -430,7 +430,7 @@ def run_join_client(host="127.0.0.1"):
     clock = pygame.time.Clock()
     camera = Camera()
     grass = GrasslandTile(size=config.GRASSLAND_TILE_SIZE)
-    # Local mirrors
+    # Local mirrors (will be swapped once we know hero types)
     p1 = RogueWarrior(-200, 0)
     p2 = Mage(200, 0)
     players = [p1, p2]
@@ -484,6 +484,20 @@ def run_join_client(host="127.0.0.1"):
             camera.y = cam.get("y", camera.y)
             rplayers = remote.get("players", [])
             if len(rplayers) >= 2:
+                # Rebuild local mirrors if hero types differ
+                def build(hero_name, x, y):
+                    if hero_name.lower().startswith("mage"):
+                        return Mage(x, y)
+                    return RogueWarrior(x, y)
+                if (rplayers[0].get("name", "").lower().startswith("mage") and not isinstance(p1, Mage)) or (
+                    rplayers[0].get("name", "").lower().startswith("rogue") and not isinstance(p1, RogueWarrior)
+                ):
+                    p1 = build(rplayers[0].get("name", ""), p1.x, p1.y)
+                if (rplayers[1].get("name", "").lower().startswith("mage") and not isinstance(p2, Mage)) or (
+                    rplayers[1].get("name", "").lower().startswith("rogue") and not isinstance(p2, RogueWarrior)
+                ):
+                    p2 = build(rplayers[1].get("name", ""), p2.x, p2.y)
+                players = [p1, p2]
                 _apply_player_state(p1, rplayers[0])
                 _apply_player_state(p2, rplayers[1])
             projectiles = []
