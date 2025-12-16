@@ -116,3 +116,42 @@ def load_animation_from_folder(folder_path, prefix, num_frames, scale=1.0, durat
                 frames.append(placeholder)
     
     return Animation(frames, duration, loop) if frames else None
+
+
+def load_animation_strip(image_path, num_frames, scale=1.0, duration=0.1, loop=True, flip_x=False):
+    """
+    Load an animation from a single horizontal sprite strip.
+
+    Args:
+        image_path: Path to the strip image.
+        num_frames: Number of frames laid out horizontally.
+        scale: Scale factor to apply to each frame.
+        duration: Frame duration.
+        loop: Whether the animation should loop.
+        flip_x: Flip frames horizontally after loading.
+    """
+    resolved = asset_path(image_path)
+    try:
+        sheet = pygame.image.load(resolved).convert_alpha()
+    except (pygame.error, FileNotFoundError, OSError) as e:
+        print(f"Error loading animation strip {image_path}: {e}")
+        return None
+
+    total_width, total_height = sheet.get_size()
+    if num_frames <= 0:
+        return None
+    frame_width = total_width // num_frames
+    frame_height = total_height
+    frames = []
+    for i in range(num_frames):
+        x = i * frame_width
+        frame = pygame.Surface((frame_width, frame_height), pygame.SRCALPHA)
+        frame.blit(sheet, (0, 0), (x, 0, frame_width, frame_height))
+        if scale != 1.0:
+            new_width = int(frame_width * scale)
+            new_height = int(frame_height * scale)
+            frame = pygame.transform.scale(frame, (new_width, new_height))
+        if flip_x:
+            frame = pygame.transform.flip(frame, True, False)
+        frames.append(frame)
+    return Animation(frames, duration, loop) if frames else None

@@ -28,6 +28,8 @@ class RogueWarrior(Player):
             "build_animations": self._build_animations,
         }
         super().__init__(x, y, controls=controls, name="Rogue Warrior", ui_color=(0, 200, 0), character_config=cfg)
+        # Keep hitbox centered; offsets remain zero so flipping stays symmetric.
+        self.collision_offset_x = 0
 
     def _build_animations(self):
         """Load hero animations from disk."""

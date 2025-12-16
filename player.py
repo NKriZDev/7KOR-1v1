@@ -3,7 +3,6 @@
 import pygame
 import math
 import config
-from player_stats import apply_buffs
 from animation import Animation
 
 # Default keyboard/mouse bindings for a player
@@ -85,9 +84,6 @@ class Player:
         self.critical_text_world_x = 0.0  # World position where critical hit occurred
         self.critical_text_world_y = 0.0
         self.critical_text_offset_y = 0.0  # Vertical offset for floating effect
-        self.critical_text_world_x = 0.0  # World position where critical hit occurred
-        self.critical_text_world_y = 0.0
-        self.critical_text_offset_y = 0.0  # Vertical offset for floating effect
         # Shielded popup effects
         self.shield_block_timer = 0.0
         self.shield_block_duration = 1.2
@@ -102,6 +98,8 @@ class Player:
         
         # Hitbox/collision settings
         self.collision_radius = stats.get("collision_radius", 20)  # Radius for collision detection
+        self.collision_offset_x = stats.get("collision_offset_x", 0)
+        self.collision_offset_y = stats.get("collision_offset_y", 0)
         
         # Shield/knockback settings
         self.knockback_velocity_x = 0.0
@@ -119,12 +117,6 @@ class Player:
         self.attack_dir_y = 1.0
         self.attack_length = self.attack_range
         self.attack_base_half_width = self.attack_range * 0.35
-        # Apply buffs to stats
-        self.refresh_stats_from_buffs()
-        
-        # XP/level
-        self.level = 1
-        self.xp = 0
         
         # Movement state tracking
         self.facing_direction = "down"
@@ -248,45 +240,10 @@ class Player:
             delta -= 2 * math.pi
         return prev_angle + delta
 
-    def refresh_stats_from_buffs(self):
-        """Recalculate derived stats using buffs"""
-        base_stats = {
-            "speed": self.base_speed,
-            "max_health": self.base_max_health,
-            "attack_damage": self.base_attack_damage,
-            "attack_range": self.attack_range,
-        }
-        buffed = apply_buffs(base_stats)
-        old_max = self.max_health
-        self.speed = buffed["speed"]
-        # Preserve current health proportionally when max changes
-        if old_max > 0:
-            health_ratio = self.health / old_max
-        else:
-            health_ratio = 1.0
-        self.max_health = buffed["max_health"]
-        self.health = min(self.max_health, self.max_health * health_ratio)
-        self.attack_damage = buffed["attack_damage"]
-        self.attack_range = buffed["attack_range"]
-
     def on_attack_started(self, dir_x, dir_y):
         """Hook for subclasses (e.g., ranged attacks). Return list of spawned projectiles."""
         return []
 
-    def _xp_threshold(self):
-        """XP needed for next level"""
-        return 50 + 25 * (self.level - 1)
-
-    def add_xp(self, amount):
-        """Add XP and handle level-ups"""
-        self.xp += amount
-        levels_gained = 0
-        while self.xp >= self._xp_threshold():
-            self.xp -= self._xp_threshold()
-            self.level += 1
-            levels_gained += 1
-        return levels_gained
-    
     def update(self, dt, keys, mouse_clicked=False, mouse_world_pos=None, mouse_right_held=False, direct_input=None):
         """Update player position and animations based on input. Returns any spawned projectiles."""
         spawned = []
@@ -493,18 +450,35 @@ class Player:
         
         return spawned
     
+    def get_collision_center(self):
+        """Return the collision center accounting for any offsets."""
+        return (
+            self.x + getattr(self, "collision_offset_x", 0),
+            self.y + getattr(self, "collision_offset_y", 0),
+        )
+
     def check_collision(self, other):
         """Check if player collides with another entity (enemy)"""
-        dx = other.x - self.x
-        dy = other.y - self.y
+        cx, cy = self.get_collision_center()
+        if hasattr(other, "get_collision_center"):
+            ox, oy = other.get_collision_center()
+        else:
+            ox, oy = other.x, other.y
+        dx = ox - cx
+        dy = oy - cy
         distance = (dx**2 + dy**2)**0.5
         min_distance = self.collision_radius + other.collision_radius
         return distance < min_distance and distance > 0
     
     def resolve_collision(self, other):
         """Push player away from another entity (enemy)"""
-        dx = other.x - self.x
-        dy = other.y - self.y
+        cx, cy = self.get_collision_center()
+        if hasattr(other, "get_collision_center"):
+            ox, oy = other.get_collision_center()
+        else:
+            ox, oy = other.x, other.y
+        dx = ox - cx
+        dy = oy - cy
         distance = (dx**2 + dy**2)**0.5
         
         if distance == 0:
@@ -533,6 +507,14 @@ class Player:
     def draw(self, screen, camera):
         """Draw player with isometric offset"""
         screen_x, screen_y = camera.apply(self.x, self.y)
+
+        # Debug: draw collision hitbox
+        hitbox_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        cx, cy = self.get_collision_center()
+        hit_x, hit_y = camera.apply(cx, cy)
+        pygame.draw.circle(hitbox_surface, (0, 255, 0, 60), (int(hit_x), int(hit_y)), int(self.collision_radius))
+        pygame.draw.circle(hitbox_surface, (0, 200, 0, 160), (int(hit_x), int(hit_y)), int(self.collision_radius), 2)
+        screen.blit(hitbox_surface, (0, 0))
         
         # Draw shield coverage visualization underneath sprite when blocking
         if self.is_blocking:
@@ -823,32 +805,6 @@ class Player:
         text_x = bar_x + (bar_width - health_text.get_width()) // 2
         text_y = bar_y + (bar_height - health_text.get_height()) // 2
         screen.blit(health_text, (text_x, text_y))
-
-    def draw_xp_bar(self, screen):
-        """Draw XP bar below health bar"""
-        bar_width = 200
-        bar_height = 12
-        bar_x = 10
-        bar_y = 36
-        
-        xp_needed = self._xp_threshold()
-        xp_ratio = 0 if xp_needed <= 0 else self.xp / xp_needed
-        xp_ratio = max(0, min(1, xp_ratio))
-        
-        # Background
-        pygame.draw.rect(screen, (30, 30, 60), (bar_x, bar_y, bar_width, bar_height))
-        # Fill
-        fill_width = int(bar_width * xp_ratio)
-        if fill_width > 0:
-            pygame.draw.rect(screen, (70, 130, 255), (bar_x, bar_y, fill_width, bar_height))
-        # Border
-        pygame.draw.rect(screen, (200, 200, 255), (bar_x, bar_y, bar_width, bar_height), 1)
-        # Text
-        font = pygame.font.Font(None, 18)
-        xp_text = font.render(f"LV {self.level}  {self.xp}/{xp_needed}", True, (200, 200, 255))
-        text_x = bar_x + (bar_width - xp_text.get_width()) // 2
-        text_y = bar_y + (bar_height - xp_text.get_height()) // 2
-        screen.blit(xp_text, (text_x, text_y))
     
     def draw_direction_indicator(self, screen, screen_x, screen_y):
         """Draw directional arrow indicator showing mouse direction"""

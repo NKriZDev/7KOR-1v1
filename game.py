@@ -12,8 +12,8 @@ from camera import Camera
 from world import GrasslandTile
 from rogue_warrior import RogueWarrior
 from mage import Mage
+from dragon import Dragon
 from projectile import Projectile
-from mage_client import run_mage_client
 
 
 def _load_version():
@@ -53,7 +53,8 @@ class Game:
         self.state_socket.bind(("", 50008))
         self.state_socket.setblocking(False)
         self.state_targets = set()
-        self.host_choice = "rogue"  # or "mage"
+        self.hero_options = ["rogue", "mage", "dragon"]
+        self.host_choice = self.hero_options[0]
         self.join_ip_input = "195.248.240.117"
         self.lobby_server_url = "http://195.248.240.117:3000"
         self.advertised_ip_input = "195.248.240.117"
@@ -83,6 +84,35 @@ class Game:
             "p2": {"attack": False, "block": False},
         }
         self.reset_game()
+
+    def _cycle_host_choice(self, direction=1):
+        """Cycle host hero selection left/right through available options."""
+        if not self.hero_options:
+            return
+        try:
+            idx = self.hero_options.index(self.host_choice)
+        except ValueError:
+            idx = 0
+        self.host_choice = self.hero_options[(idx + direction) % len(self.hero_options)]
+
+    def _next_hero_choice(self, current_choice):
+        """Return the next hero in the list (used for opponent default)."""
+        if not self.hero_options:
+            return "rogue"
+        try:
+            idx = self.hero_options.index(current_choice)
+        except ValueError:
+            idx = 0
+        return self.hero_options[(idx + 1) % len(self.hero_options)]
+
+    def _build_player(self, hero_key, x, y, controls=None):
+        """Instantiate a player subclass based on hero key."""
+        key = (hero_key or "").lower()
+        if key == "mage":
+            return Mage(x, y, controls=controls)
+        if key == "dragon":
+            return Dragon(x, y, controls=controls)
+        return RogueWarrior(x, y, controls=controls)
     
     def reset_game(self):
         """Reset game state for a fresh 1v1 round."""
@@ -97,12 +127,11 @@ class Game:
             "attack": "key_attack",
             "block": "key_block",
         }
-        if self.host_choice == "rogue":
-            self.player1 = RogueWarrior(-200, 0, controls=p1_controls)
-            self.player2 = Mage(200, 0, controls=p2_controls)
-        else:
-            self.player1 = Mage(-200, 0, controls=p1_controls)
-            self.player2 = RogueWarrior(200, 0, controls=p2_controls)
+        if self.host_choice not in self.hero_options:
+            self.host_choice = self.hero_options[0]
+        opponent_choice = self._next_hero_choice(self.host_choice)
+        self.player1 = self._build_player(self.host_choice, -200, 0, controls=p1_controls)
+        self.player2 = self._build_player(opponent_choice, 200, 0, controls=p2_controls)
         self.players = [self.player1, self.player2]
         self.projectiles = []
         self.input_state["p1"]["attack"] = False
@@ -159,8 +188,10 @@ class Game:
                         self.p2p_room_id = None
                         self.using_p2p = True
                 elif self.game_state == "host_select":
-                    if event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_TAB):
-                        self.host_choice = "mage" if self.host_choice == "rogue" else "rogue"
+                    if event.key == pygame.K_LEFT:
+                        self._cycle_host_choice(-1)
+                    elif event.key in (pygame.K_RIGHT, pygame.K_TAB):
+                        self._cycle_host_choice(1)
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         self.game_state = "playing"
                         self.current_lobby_id = None
@@ -183,7 +214,8 @@ class Game:
                     elif event.key in (pygame.K_TAB, pygame.K_UP, pygame.K_DOWN):
                         self.host_online_field = "server" if self.host_online_field == "ip" else "ip"
                     elif event.key in (pygame.K_LEFT, pygame.K_RIGHT):
-                        self.host_choice = "mage" if self.host_choice == "rogue" else "rogue"
+                        direction = -1 if event.key == pygame.K_LEFT else 1
+                        self._cycle_host_choice(direction)
                     elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                         self.create_online_lobby()
                     else:
@@ -217,7 +249,8 @@ class Game:
                     elif event.key in (pygame.K_TAB, pygame.K_UP, pygame.K_DOWN):
                         self.p2p_field = "server"
                     elif event.key in (pygame.K_LEFT, pygame.K_RIGHT):
-                        self.host_choice = "mage" if self.host_choice == "rogue" else "rogue"
+                        direction = -1 if event.key == pygame.K_LEFT else 1
+                        self._cycle_host_choice(direction)
                     elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                         self.create_p2p_room()
                     else:
@@ -573,8 +606,8 @@ class Game:
         # Draw UI info
         font = pygame.font.Font(None, 24)
         info_lines_left = [
-            "P1 (Rogue): WASD to move",
-            "Mouse Left to attack, Right to block",
+            f"P1 ({self.player1.name}): WASD to move",
+            "Mouse Left to attack, Right to block (if shielded)",
             "Space to dash, G to emote",
         ]
         for i, line in enumerate(info_lines_left):
@@ -582,9 +615,9 @@ class Game:
             self.screen.blit(info_text, (10, 20 + i * 22))
         
         info_lines_right = [
-            "P2 (Mage): Arrow keys to move",
-            "Right Ctrl to shoot, Right Shift to dash",
-            "Slash to emote (no shield; uses projectiles)",
+            f"P2 ({self.player2.name}): Arrow keys to move",
+            "Right Ctrl/Mouse Left to attack, Right Click to block (if shielded)",
+            "Right Shift to dash, Slash to emote",
         ]
         for i, line in enumerate(info_lines_right):
             info_text = font.render(line, True, (255, 255, 255))
@@ -595,7 +628,7 @@ class Game:
         self.draw_player_ui(self.player2, config.SCREEN_WIDTH - 210, config.SCREEN_HEIGHT - 70)
         if self.remote_input:
             font = pygame.font.Font(None, 24)
-            info_text = font.render("Remote mage connected", True, (120, 220, 120))
+            info_text = font.render("Remote player connected", True, (120, 220, 120))
             self.screen.blit(info_text, (config.SCREEN_WIDTH // 2 - info_text.get_width() // 2, 10))
         if self.current_lobby_id:
             font = pygame.font.Font(None, 24)
@@ -1146,16 +1179,24 @@ def run_join_client(
             if len(rplayers) >= 2:
                 # Rebuild local mirrors if hero types differ
                 def build(hero_name, x, y):
-                    if hero_name.lower().startswith("mage"):
+                    lname = hero_name.lower()
+                    if lname.startswith("mage"):
                         return Mage(x, y)
+                    if lname.startswith("dragon"):
+                        return Dragon(x, y)
                     return RogueWarrior(x, y)
-                if (rplayers[0].get("name", "").lower().startswith("mage") and not isinstance(p1, Mage)) or (
-                    rplayers[0].get("name", "").lower().startswith("rogue") and not isinstance(p1, RogueWarrior)
-                ):
+
+                def matches(hero_name, player_obj):
+                    lname = hero_name.lower()
+                    return (
+                        (lname.startswith("mage") and isinstance(player_obj, Mage))
+                        or (lname.startswith("dragon") and isinstance(player_obj, Dragon))
+                        or (lname.startswith("rogue") and isinstance(player_obj, RogueWarrior))
+                    )
+
+                if not matches(rplayers[0].get("name", ""), p1):
                     p1 = build(rplayers[0].get("name", ""), p1.x, p1.y)
-                if (rplayers[1].get("name", "").lower().startswith("mage") and not isinstance(p2, Mage)) or (
-                    rplayers[1].get("name", "").lower().startswith("rogue") and not isinstance(p2, RogueWarrior)
-                ):
+                if not matches(rplayers[1].get("name", ""), p2):
                     p2 = build(rplayers[1].get("name", ""), p2.x, p2.y)
                 players = [p1, p2]
                 _apply_player_state(p1, rplayers[0])
@@ -1216,19 +1257,5 @@ def run_join_client(
 
 if __name__ == "__main__":
     pygame.init()
-    if "--join-mage" in sys.argv:
-        idx = sys.argv.index("--join-mage")
-        host = "127.0.0.1"
-        if idx + 1 < len(sys.argv):
-            host = sys.argv[idx + 1]
-        run_mage_client(host)
-    elif "--client" in sys.argv:
-        idx = sys.argv.index("--client")
-        host = "127.0.0.1"
-        if idx + 1 < len(sys.argv):
-            host = sys.argv[idx + 1]
-        from spectator_client import run_spectator
-        run_spectator(host)
-    else:
-        game = Game()
-        game.run()
+    game = Game()
+    game.run()
