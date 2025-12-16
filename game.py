@@ -6,6 +6,7 @@ import socket
 import sys
 import requests
 from pathlib import Path
+import threading
 import config
 from camera import Camera
 from world import GrasslandTile
@@ -56,6 +57,10 @@ class Game:
         self.join_ip_input = "195.248.240.117"
         self.lobby_server_url = "http://195.248.240.117:3000"
         self.advertised_ip_input = "195.248.240.117"
+        self.p2p_server_url = "http://195.248.240.117:3100"
+        self.p2p_room_id = None
+        self.p2p_status = ""
+        self.p2p_field = "server"  # or "code"
         self.join_online_code_input = ""
         self.host_online_status = ""
         self.join_online_status = ""
@@ -67,6 +72,11 @@ class Game:
         self.relay_control_port = 40007
         self.relay_state_port = 40008
         self.relay_keepalive_timer = 0.0
+        self.using_p2p = False
+        self.p2p_control_targets = []
+        self.p2p_state_targets = []
+        self.p2p_last_register = 0.0
+        self.p2p_fetch_inflight = False
         # Input tracking per player
         self.input_state = {
             "p1": {"attack": False, "block": False},
@@ -119,10 +129,12 @@ class Game:
                     if event.key == pygame.K_h:
                         self.game_state = "host_select"
                         self.using_relay = False
+                        self.using_p2p = False
                         self.current_lobby_id = None
                     elif event.key == pygame.K_j:
                         self.game_state = "join_menu"
                         self.using_relay = False
+                        self.using_p2p = False
                         self.current_lobby_id = None
                     elif event.key == pygame.K_o:
                         self.game_state = "host_online"
@@ -134,6 +146,18 @@ class Game:
                         self.join_online_status = ""
                         self.join_online_field = "code"
                         self.current_lobby_id = None
+                    elif event.key == pygame.K_u:
+                        self.game_state = "host_p2p"
+                        self.p2p_status = ""
+                        self.p2p_field = "server"
+                        self.p2p_room_id = None
+                        self.using_p2p = True
+                    elif event.key == pygame.K_i:
+                        self.game_state = "join_p2p"
+                        self.p2p_status = ""
+                        self.p2p_field = "code"
+                        self.p2p_room_id = None
+                        self.using_p2p = True
                 elif self.game_state == "host_select":
                     if event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_TAB):
                         self.host_choice = "mage" if self.host_choice == "rogue" else "rogue"
@@ -186,6 +210,38 @@ class Game:
                                 self.join_online_code_input += ch
                             else:
                                 self.lobby_server_url += ch
+                elif self.game_state == "host_p2p":
+                    if event.key == pygame.K_BACKSPACE:
+                        if self.p2p_field == "server":
+                            self.p2p_server_url = self.p2p_server_url[:-1]
+                    elif event.key in (pygame.K_TAB, pygame.K_UP, pygame.K_DOWN):
+                        self.p2p_field = "server"
+                    elif event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                        self.host_choice = "mage" if self.host_choice == "rogue" else "rogue"
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        self.create_p2p_room()
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            if self.p2p_field == "server":
+                                self.p2p_server_url += ch
+                elif self.game_state == "join_p2p":
+                    if event.key == pygame.K_BACKSPACE:
+                        if self.p2p_field == "code":
+                            self.join_online_code_input = self.join_online_code_input[:-1]
+                        else:
+                            self.p2p_server_url = self.p2p_server_url[:-1]
+                    elif event.key in (pygame.K_TAB, pygame.K_UP, pygame.K_DOWN):
+                        self.p2p_field = "server" if self.p2p_field == "code" else "code"
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        self.join_p2p_room()
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            if self.p2p_field == "code":
+                                self.join_online_code_input += ch
+                            else:
+                                self.p2p_server_url += ch
                 elif self.game_state == "playing":
                     if event.key in (pygame.K_RCTRL, pygame.K_LCTRL, pygame.K_KP0):
                         self.input_state["p2"]["attack"] = True
@@ -209,6 +265,8 @@ class Game:
             return
         if self.using_relay and self.current_lobby_id:
             self.tick_relay(dt)
+        if self.using_p2p and self.p2p_room_id:
+            self.tick_p2p(dt)
         
         self.poll_remote_input()
         self.poll_state_clients()
@@ -302,6 +360,10 @@ class Game:
             self.draw_host_online_menu()
         elif self.game_state == "join_online":
             self.draw_join_online_menu()
+        elif self.game_state == "host_p2p":
+            self.draw_host_p2p_menu()
+        elif self.game_state == "join_p2p":
+            self.draw_join_p2p_menu()
         else:
             self.draw_game()
         
@@ -333,8 +395,16 @@ class Game:
         online_join_rect = online_join.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 120))
         self.screen.blit(online_join, online_join_rect)
 
+        p2p_host = font.render("Press U to Host P2P", True, (200, 230, 200))
+        p2p_host_rect = p2p_host.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 160))
+        self.screen.blit(p2p_host, p2p_host_rect)
+
+        p2p_join = font.render("Press I to Join P2P", True, (200, 230, 200))
+        p2p_join_rect = p2p_join.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 200))
+        self.screen.blit(p2p_join, p2p_join_rect)
+
         esc_text = font.render("Press ESC to Quit", True, (200, 200, 200))
-        esc_rect = esc_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 170))
+        esc_rect = esc_text.get_rect(center=(config.SCREEN_WIDTH // 2, config.SCREEN_HEIGHT // 2 + 240))
         self.screen.blit(esc_text, esc_rect)
         
         if self.last_winner:
@@ -428,6 +498,61 @@ class Game:
         self.screen.blit(hint, (config.SCREEN_WIDTH // 2 - hint.get_width() // 2, 360))
         if self.join_online_status:
             status = font_small.render(self.join_online_status, True, (220, 180, 120))
+            self.screen.blit(status, (config.SCREEN_WIDTH // 2 - status.get_width() // 2, 410))
+
+    def draw_host_p2p_menu(self):
+        font = pygame.font.Font(None, 52)
+        title = font.render("Host P2P", True, (255, 255, 255))
+        self.screen.blit(title, (config.SCREEN_WIDTH // 2 - title.get_width() // 2, 110))
+        font_small = pygame.font.Font(None, 32)
+
+        srv_label = font_small.render("P2P server URL (signaling only):", True, (200, 200, 200))
+        self.screen.blit(srv_label, (config.SCREEN_WIDTH // 2 - srv_label.get_width() // 2, 190))
+        srv_box = pygame.Rect(config.SCREEN_WIDTH // 2 - 260, 225, 520, 44)
+        pygame.draw.rect(self.screen, (40, 40, 60), srv_box)
+        pygame.draw.rect(self.screen, (230, 230, 120) if self.p2p_field == "server" else (200, 200, 200), srv_box, 2)
+        srv_text = font_small.render(self.p2p_server_url or " ", True, (200, 255, 255))
+        self.screen.blit(srv_text, (srv_box.x + 10, srv_box.y + 8))
+
+        hero = font_small.render(f"Your hero: {self.host_choice.title()}  (LEFT/RIGHT to toggle)", True, (220, 220, 220))
+        self.screen.blit(hero, (config.SCREEN_WIDTH // 2 - hero.get_width() // 2, 290))
+
+        hint = font_small.render("TAB to switch field, ENTER to create lobby & start, ESC to cancel", True, (200, 200, 200))
+        self.screen.blit(hint, (config.SCREEN_WIDTH // 2 - hint.get_width() // 2, 340))
+
+        if self.p2p_status:
+            status = font_small.render(self.p2p_status, True, (220, 180, 120))
+            self.screen.blit(status, (config.SCREEN_WIDTH // 2 - status.get_width() // 2, 390))
+        if self.p2p_room_id:
+            room = font_small.render(f"Code: {self.p2p_room_id}", True, (220, 220, 120))
+            self.screen.blit(room, (config.SCREEN_WIDTH // 2 - room.get_width() // 2, 430))
+
+    def draw_join_p2p_menu(self):
+        font = pygame.font.Font(None, 52)
+        title = font.render("Join P2P", True, (255, 255, 255))
+        self.screen.blit(title, (config.SCREEN_WIDTH // 2 - title.get_width() // 2, 110))
+        font_small = pygame.font.Font(None, 32)
+
+        code_label = font_small.render("Lobby code:", True, (200, 200, 200))
+        self.screen.blit(code_label, (config.SCREEN_WIDTH // 2 - code_label.get_width() // 2, 180))
+        code_box = pygame.Rect(config.SCREEN_WIDTH // 2 - 200, 215, 400, 44)
+        pygame.draw.rect(self.screen, (40, 40, 60), code_box)
+        pygame.draw.rect(self.screen, (230, 230, 120) if self.p2p_field == "code" else (200, 200, 200), code_box, 2)
+        code_text = font_small.render(self.join_online_code_input or " ", True, (255, 255, 0))
+        self.screen.blit(code_text, (code_box.x + 10, code_box.y + 8))
+
+        srv_label = font_small.render("P2P server URL:", True, (200, 200, 200))
+        self.screen.blit(srv_label, (config.SCREEN_WIDTH // 2 - srv_label.get_width() // 2, 270))
+        srv_box = pygame.Rect(config.SCREEN_WIDTH // 2 - 260, 305, 520, 44)
+        pygame.draw.rect(self.screen, (40, 40, 60), srv_box)
+        pygame.draw.rect(self.screen, (230, 230, 120) if self.p2p_field == "server" else (200, 200, 200), srv_box, 2)
+        srv_text = font_small.render(self.p2p_server_url or " ", True, (200, 255, 255))
+        self.screen.blit(srv_text, (srv_box.x + 10, srv_box.y + 8))
+
+        hint = font_small.render("TAB to switch field, ENTER to join, ESC to cancel", True, (200, 200, 200))
+        self.screen.blit(hint, (config.SCREEN_WIDTH // 2 - hint.get_width() // 2, 360))
+        if self.p2p_status:
+            status = font_small.render(self.p2p_status, True, (220, 180, 120))
             self.screen.blit(status, (config.SCREEN_WIDTH // 2 - status.get_width() // 2, 410))
     
     def draw_game(self):
@@ -566,11 +691,114 @@ class Game:
         except requests.RequestException as exc:
             self.join_online_status = f"Network error: {exc}"
 
+    def create_p2p_room(self):
+        base_url = (self.p2p_server_url or "").rstrip("/")
+        if not base_url:
+            self.p2p_status = "P2P server URL required."
+            return
+        payload = {
+            "host_choice": self.host_choice,
+            "host_control_port": 50007,
+            "host_state_port": 50008,
+            "host_local_ip": self._guess_local_ip(base_url),
+        }
+        try:
+            resp = requests.post(f"{base_url}/rooms", json=payload, timeout=4)
+            if resp.status_code >= 400:
+                self.p2p_status = f"Server error: {resp.status_code}"
+                return
+            data = resp.json()
+            room_id = data.get("id")
+            if not room_id:
+                self.p2p_status = "No code returned."
+                return
+            self.p2p_room_id = room_id
+            self.using_p2p = True
+            self.p2p_control_targets = []
+            self.p2p_state_targets = []
+            self.p2p_status = f"P2P code: {room_id}. Share it."
+            self.game_state = "playing"
+            self.reset_game()
+        except requests.RequestException as exc:
+            self.p2p_status = f"Network error: {exc}"
+
+    def join_p2p_room(self):
+        code = (self.join_online_code_input or "").strip().lower()
+        if not code:
+            self.p2p_status = "Lobby code required."
+            return
+        base_url = (self.p2p_server_url or "").rstrip("/")
+        if not base_url:
+            self.p2p_status = "P2P server URL required."
+            return
+        try:
+            resp = requests.get(f"{base_url}/rooms/{code}", timeout=4)
+            if resp.status_code == 404:
+                self.p2p_status = "Lobby not found/expired."
+                return
+            if resp.status_code >= 400:
+                self.p2p_status = f"Server error: {resp.status_code}"
+                return
+            room = resp.json()
+            host_ip = room.get("host_public_ip") or room.get("host_ip")
+            host_control = room.get("host_control_port", 50007)
+            host_state = room.get("host_state_port", 50008)
+            host_local_ip = room.get("host_local_ip")
+            host_local_control = room.get("host_local_control_port", host_control)
+            host_local_state = room.get("host_local_state_port", host_state)
+            if not host_ip:
+                self.p2p_status = "Room missing host IP."
+                return
+            join_payload = {
+                "client_control_port": 50007,
+                "client_state_port": 50008,
+                "client_local_ip": self._guess_local_ip(base_url),
+            }
+            try:
+                requests.post(f"{base_url}/rooms/{code}/join", json=join_payload, timeout=4)
+            except requests.RequestException:
+                pass
+            control_targets = [(host_ip, host_control)]
+            state_targets = [(host_ip, host_state)]
+            if host_local_ip:
+                control_targets.append((host_local_ip, host_local_control))
+                state_targets.append((host_local_ip, host_local_state))
+            self.p2p_status = f"Connecting to host {host_ip}..."
+            run_join_client(
+                host_ip,
+                lobby_id=code,
+                relay_host=None,
+                relay_control_port=host_control,
+                relay_state_port=host_state,
+                direct_control_targets=control_targets,
+                direct_state_targets=state_targets,
+            )
+            self.game_state = "menu"
+        except requests.RequestException as exc:
+            self.p2p_status = f"Network error: {exc}"
+
     def _extract_host_from_base(self, base_url):
         try:
             from urllib.parse import urlparse
             parsed = urlparse(base_url)
             return parsed.hostname
+        except Exception:
+            return None
+
+    def _guess_local_ip(self, base_url=None):
+        try:
+            import urllib.parse
+            host = "8.8.8.8"
+            port = 80
+            if base_url:
+                parsed = urllib.parse.urlparse(base_url)
+                if parsed.hostname:
+                    host = parsed.hostname
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect((host, port))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
         except Exception:
             return None
 
@@ -656,6 +884,13 @@ class Game:
                     self.state_targets.discard(addr)
         if self.using_relay and self.current_lobby_id and self.relay_host:
             self.broadcast_state_via_relay(state)
+        elif self.using_p2p and self.p2p_state_targets:
+            payload = json.dumps(state).encode("utf-8")
+            for addr in list(self.p2p_state_targets):
+                try:
+                    self.state_socket.sendto(payload, addr)
+                except OSError:
+                    pass
 
     def tick_relay(self, dt):
         """Keep relay registration alive so the server can forward packets."""
@@ -674,6 +909,44 @@ class Game:
                 self.state_socket.sendto(json.dumps(reg_state).encode("utf-8"), (self.relay_host, self.relay_state_port))
             except OSError:
                 pass
+
+    def tick_p2p(self, dt):
+        """Refresh p2p registration and targets."""
+        self.p2p_last_register += dt
+        if self.p2p_last_register >= 2.0 and not self.p2p_fetch_inflight:
+            self.p2p_last_register = 0.0
+            self.p2p_fetch_inflight = True
+            threading.Thread(target=self.poll_p2p_peer, daemon=True).start()
+
+    def poll_p2p_peer(self):
+        """Fetch P2P room info and update target endpoints for state broadcast."""
+        if not self.p2p_room_id or not self.p2p_server_url:
+            self.p2p_fetch_inflight = False
+            return
+        base_url = (self.p2p_server_url or "").rstrip("/")
+        try:
+            resp = requests.get(f"{base_url}/rooms/{self.p2p_room_id}", timeout=0.3)
+            if resp.status_code != 200:
+                self.p2p_fetch_inflight = False
+                return
+            room = resp.json()
+            targets = []
+            # Prefer client public endpoint
+            cip = room.get("client_public_ip")
+            cstate = room.get("client_state_port", 50008)
+            if cip and cstate:
+                targets.append((cip, cstate))
+            # Also try client local endpoint if available
+            clip = room.get("client_local_ip")
+            clstate = room.get("client_local_state_port", cstate)
+            if clip and clstate:
+                targets.append((clip, clstate))
+            if targets:
+                self.p2p_state_targets = targets
+        except requests.RequestException:
+            pass
+        finally:
+            self.p2p_fetch_inflight = False
 
     def broadcast_state_via_relay(self, state):
         """Send state to relay server which forwards to clients."""
@@ -755,7 +1028,15 @@ def _apply_player_state(player, data):
             player.animations.set_animation("idle")
 
 
-def run_join_client(host="127.0.0.1", lobby_id=None, relay_host=None, relay_control_port=40007, relay_state_port=40008):
+def run_join_client(
+    host="127.0.0.1",
+    lobby_id=None,
+    relay_host=None,
+    relay_control_port=40007,
+    relay_state_port=40008,
+    direct_control_targets=None,
+    direct_state_targets=None,
+):
     pygame.display.set_caption("7KOR - Join")
     screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
     clock = pygame.time.Clock()
@@ -767,11 +1048,20 @@ def run_join_client(host="127.0.0.1", lobby_id=None, relay_host=None, relay_cont
     players = [p1, p2]
     projectiles = []
     state_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    state_sock.bind(("", 0))
+    try:
+        state_sock.bind(("", 50008))
+    except OSError:
+        state_sock.bind(("", 0))
     state_sock.setblocking(False)
     control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        control_sock.bind(("", 50007))
+    except OSError:
+        control_sock.bind(("", 0))
     control_dest = (relay_host, relay_control_port) if relay_host else (host, 50007)
     state_dest = (relay_host, relay_state_port) if relay_host else (host, 50008)
+    control_targets = direct_control_targets or [control_dest]
+    state_targets = direct_state_targets or [state_dest]
     if relay_host:
         try:
             reg = {"lobby": lobby_id or "", "role": "client", "kind": "state", "type": "register"}
@@ -779,7 +1069,11 @@ def run_join_client(host="127.0.0.1", lobby_id=None, relay_host=None, relay_cont
         except OSError:
             pass
     else:
-        state_sock.sendto(b"hello", state_dest)
+        for dest in state_targets:
+            try:
+                state_sock.sendto(b"hello", dest)
+            except OSError:
+                pass
     game_state = "menu"
     last_winner = None
     running = True
@@ -831,7 +1125,12 @@ def run_join_client(host="127.0.0.1", lobby_id=None, relay_host=None, relay_cont
                 envelope = {"lobby": lobby_id or "", "role": "client", "kind": "control", "payload": payload}
                 control_sock.sendto(json.dumps(envelope).encode("utf-8"), control_dest)
             else:
-                control_sock.sendto(json.dumps(payload).encode("utf-8"), control_dest)
+                data = json.dumps(payload).encode("utf-8")
+                for dest in control_targets:
+                    try:
+                        control_sock.sendto(data, dest)
+                    except OSError:
+                        pass
         except OSError:
             pass
 
