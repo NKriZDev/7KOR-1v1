@@ -10,9 +10,10 @@ import threading
 import config
 from camera import Camera
 from world import GrasslandTile
+from dummy import TrainingDummy
 from rogue_warrior import RogueWarrior
 from mage import Mage
-from dragon import Dragon
+from demon import Demon
 from projectile import Projectile
 import math
 
@@ -25,30 +26,6 @@ def _load_version():
 
 
 GAME_VERSION = _load_version()
-
-
-class TrainingDummy:
-    """Simple 1000 HP dummy for testing attacks."""
-
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-        self.max_health = 1000
-        self.health = self.max_health
-        self.is_dead = False
-        self.collision_radius = 28
-        self.ui_color = (180, 180, 180)
-
-    def take_damage(self, amount, enemy=None, knockback_x=None, knockback_y=None):
-        self.health = max(0, self.health - amount)
-        if self.health <= 0:
-            self.is_dead = True
-        return False
-
-    def draw(self, screen, camera):
-        sx, sy = camera.apply(self.x, self.y)
-        pygame.draw.circle(screen, (120, 120, 120), (int(sx), int(sy)), self.collision_radius)
-        pygame.draw.circle(screen, (200, 200, 200), (int(sx), int(sy)), self.collision_radius, 2)
 
 class Game:
     """Main game class"""
@@ -78,7 +55,7 @@ class Game:
         self.state_socket.bind(("", 50008))
         self.state_socket.setblocking(False)
         self.state_targets = set()
-        self.hero_options = ["rogue", "mage", "dragon"]
+        self.hero_options = ["rogue", "mage", "demon"]
         self.host_choice = self.hero_options[0]
         self.join_ip_input = "195.248.240.117"
         self.lobby_server_url = "http://195.248.240.117:3000"
@@ -135,8 +112,8 @@ class Game:
         key = (hero_key or "").lower()
         if key == "mage":
             return Mage(x, y, controls=controls)
-        if key == "dragon":
-            return Dragon(x, y, controls=controls)
+        if key == "demon":
+            return Demon(x, y, controls=controls)
         return RogueWarrior(x, y, controls=controls)
     
     def reset_game(self):
@@ -157,6 +134,8 @@ class Game:
         opponent_choice = self._next_hero_choice(self.host_choice)
         self.player1 = self._build_player(self.host_choice, -200, 0, controls=p1_controls)
         self.player2 = self._build_player(opponent_choice, 200, 0, controls=p2_controls)
+        self.player1.is_local_player = True
+        self.player2.is_local_player = False
         self.players = [self.player1, self.player2]
         self.projectiles = []
         self.input_state["p1"]["attack"] = False
@@ -384,12 +363,10 @@ class Game:
             self.player2.resolve_collision(self.player1)
         
         # Apply damage if attacks connect
-        self.player1.attack_enemies([self.player2])
-        self.player2.attack_enemies([self.player1])
-        # Players can attack dummies
-        for pl in self.players:
-            if hasattr(pl, "attack_enemies"):
-                pl.attack_enemies(self.dummies)
+        enemies_for_p1 = [self.player2] + self.dummies
+        enemies_for_p2 = [self.player1] + self.dummies
+        self.player1.attack_enemies(enemies_for_p1)
+        self.player2.attack_enemies(enemies_for_p2)
 
         # Update projectiles and check collisions
         for proj in list(self.projectiles):
@@ -925,6 +902,7 @@ class Game:
                     "is_blocking": p.is_blocking,
                     "is_gesturing": p.is_gesturing,
                     "is_moving": p.is_moving,
+                    "is_wizard_form": getattr(p, "is_wizard_form", False),
                     "attack_dir_x": getattr(p, "attack_dir_x", 0.0),
                     "attack_dir_y": getattr(p, "attack_dir_y", 1.0),
                     "attack_origin_x": getattr(p, "attack_origin_x", p.x),
@@ -941,6 +919,7 @@ class Game:
                     "shield_text_world_x": getattr(p, "shield_text_world_x", p.x),
                     "shield_text_world_y": getattr(p, "shield_text_world_y", p.y),
                     "shield_text_offset_y": getattr(p, "shield_text_offset_y", 0.0),
+                    "is_invisible": getattr(p, "is_invisible", False),
                     "ui_color": p.ui_color,
                 }
                 for p in self.players
@@ -1064,6 +1043,7 @@ def _apply_player_state(player, data):
     player.is_blocking = data["is_blocking"]
     player.is_gesturing = data["is_gesturing"]
     player.is_moving = data["is_moving"]
+    player.is_wizard_form = data.get("is_wizard_form", getattr(player, "is_wizard_form", False))
     player.mouse_world_x = data.get("mouse_world_x", player.x)
     player.mouse_world_y = data.get("mouse_world_y", player.y)
     player.shield_angle = data.get("shield_angle", getattr(player, "shield_angle", 0.0))
@@ -1076,6 +1056,7 @@ def _apply_player_state(player, data):
     player.shield_text_world_x = data.get("shield_text_world_x", player.x)
     player.shield_text_world_y = data.get("shield_text_world_y", player.y)
     player.shield_text_offset_y = data.get("shield_text_offset_y", 0.0)
+    player.is_invisible = data.get("is_invisible", getattr(player, "is_invisible", False))
     # Sync attack visualization for remote viewers
     if player.is_attacking:
         player.attack_origin_x = data.get("attack_origin_x", player.x)
@@ -1126,6 +1107,8 @@ def run_join_client(
     # Local mirrors (will be swapped once we know hero types)
     p1 = RogueWarrior(-200, 0)
     p2 = Mage(200, 0)
+    p1.is_local_player = False
+    p2.is_local_player = True
     players = [p1, p2]
     projectiles = []
     state_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1229,16 +1212,19 @@ def run_join_client(
                 def build(hero_name, x, y):
                     lname = hero_name.lower()
                     if lname.startswith("mage"):
-                        return Mage(x, y)
-                    if lname.startswith("dragon"):
-                        return Dragon(x, y)
-                    return RogueWarrior(x, y)
+                        obj = Mage(x, y)
+                    if lname.startswith("demon"):
+                        obj = Demon(x, y)
+                    else:
+                        obj = RogueWarrior(x, y)
+                    obj.is_local_player = False
+                    return obj
 
                 def matches(hero_name, player_obj):
                     lname = hero_name.lower()
                     return (
                         (lname.startswith("mage") and isinstance(player_obj, Mage))
-                        or (lname.startswith("dragon") and isinstance(player_obj, Dragon))
+                        or (lname.startswith("demon") and isinstance(player_obj, Demon))
                         or (lname.startswith("rogue") and isinstance(player_obj, RogueWarrior))
                     )
 
@@ -1246,6 +1232,7 @@ def run_join_client(
                     p1 = build(rplayers[0].get("name", ""), p1.x, p1.y)
                 if not matches(rplayers[1].get("name", ""), p2):
                     p2 = build(rplayers[1].get("name", ""), p2.x, p2.y)
+                    p2.is_local_player = True
                 players = [p1, p2]
                 _apply_player_state(p1, rplayers[0])
                 _apply_player_state(p2, rplayers[1])

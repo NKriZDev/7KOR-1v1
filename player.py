@@ -552,6 +552,19 @@ class Player:
         if self.is_attacking:
             self.draw_attack_hitbox(screen, camera, screen_x, screen_y)
 
+        # Draw up to 5 curse dots above the head
+        curses = int(getattr(self, "curse_count", 0))
+        if curses > 0:
+            dots = min(5, curses)
+            radius = 5
+            spacing = 12
+            base_y = screen_y - self.collision_radius - 10
+            start_x = screen_x - (dots - 1) * spacing * 0.5
+            for i in range(dots):
+                cx = start_x + i * spacing
+                cy = base_y
+                pygame.draw.circle(screen, (150, 0, 200), (int(cx), int(cy)), radius)
+
     def draw_attack_hitbox(self, screen, camera, screen_x, screen_y):
         """Visualize current attack hitbox"""
         apex, base_left, base_right = self.get_attack_triangle_points()
