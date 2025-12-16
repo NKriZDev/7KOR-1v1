@@ -14,6 +14,7 @@ from rogue_warrior import RogueWarrior
 from mage import Mage
 from dragon import Dragon
 from projectile import Projectile
+import math
 
 
 def _load_version():
@@ -25,6 +26,29 @@ def _load_version():
 
 GAME_VERSION = _load_version()
 
+
+class TrainingDummy:
+    """Simple 1000 HP dummy for testing attacks."""
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.max_health = 1000
+        self.health = self.max_health
+        self.is_dead = False
+        self.collision_radius = 28
+        self.ui_color = (180, 180, 180)
+
+    def take_damage(self, amount, enemy=None, knockback_x=None, knockback_y=None):
+        self.health = max(0, self.health - amount)
+        if self.health <= 0:
+            self.is_dead = True
+        return False
+
+    def draw(self, screen, camera):
+        sx, sy = camera.apply(self.x, self.y)
+        pygame.draw.circle(screen, (120, 120, 120), (int(sx), int(sy)), self.collision_radius)
+        pygame.draw.circle(screen, (200, 200, 200), (int(sx), int(sy)), self.collision_radius, 2)
 
 class Game:
     """Main game class"""
@@ -42,6 +66,7 @@ class Game:
         self.players = []
         self.player1 = None
         self.player2 = None
+        self.dummies = []
         self.last_winner = None
         self.projectiles = []
         self.remote_input = None
@@ -138,7 +163,14 @@ class Game:
         self.input_state["p1"]["block"] = False
         self.input_state["p2"]["attack"] = False
         self.input_state["p2"]["block"] = False
-        
+        self.dummies = []
+
+    def spawn_dummy(self):
+        """Spawn a 1000 HP training dummy at the camera center."""
+        x = self.camera.x
+        y = self.camera.y
+        self.dummies.append(TrainingDummy(x, y))
+
     def handle_events(self):
         """Handle pygame events"""
         # Reset per-frame attack clicks
@@ -154,6 +186,8 @@ class Game:
                         self.running = False
                     else:
                         self.game_state = "menu"
+                elif self.game_state == "playing" and event.key == pygame.K_h:
+                    self.spawn_dummy()
                 elif self.game_state == "menu":
                     if event.key == pygame.K_h:
                         self.game_state = "host_select"
@@ -352,11 +386,15 @@ class Game:
         # Apply damage if attacks connect
         self.player1.attack_enemies([self.player2])
         self.player2.attack_enemies([self.player1])
+        # Players can attack dummies
+        for pl in self.players:
+            if hasattr(pl, "attack_enemies"):
+                pl.attack_enemies(self.dummies)
 
         # Update projectiles and check collisions
         for proj in list(self.projectiles):
             proj.update(dt)
-            for player in self.players:
+            for player in self.players + self.dummies:
                 if player is proj.owner:
                     continue
                 if proj.check_collision(player):
@@ -375,7 +413,10 @@ class Game:
         if winner:
             self.last_winner = winner.name
             self.game_state = "menu"
-        
+
+        # Remove dead dummies
+        self.dummies = [d for d in self.dummies if not getattr(d, "is_dead", False)]
+
         self.broadcast_state()
     
     def draw(self):
@@ -600,6 +641,9 @@ class Game:
         # Draw players
         for player in self.players:
             player.draw(self.screen, self.camera)
+        # Draw dummies
+        for dummy in self.dummies:
+            dummy.draw(self.screen, self.camera)
         for player in self.players:
             player.draw_critical_effects(self.screen, self.camera)
         
@@ -635,6 +679,10 @@ class Game:
             label = f"Lobby {self.current_lobby_id} | Share IP: {self.advertised_ip_input}"
             lobby_text = font.render(label, True, (220, 220, 120))
             self.screen.blit(lobby_text, (config.SCREEN_WIDTH // 2 - lobby_text.get_width() // 2, 36))
+        if self.dummies:
+            font = pygame.font.Font(None, 20)
+            dummy_text = font.render(f"Dummies: {len(self.dummies)}", True, (200, 220, 200))
+            self.screen.blit(dummy_text, (10, config.SCREEN_HEIGHT - 100))
     
     def draw_player_ui(self, player, bar_x, bar_y):
         """Draw a simple health bar for a player at a given screen position."""

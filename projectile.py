@@ -47,8 +47,27 @@ class Projectile:
                 rotated = pygame.transform.rotate(frame, angle)
                 rect = rotated.get_rect(center=(int(sx), int(sy)))
                 screen.blit(rotated, rect)
-                return
+            # Draw a simple hitbox overlay for mage projectiles (and any others) for clarity
+            hit_color = (255, 0, 0, 80)
+            overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+            pygame.draw.rect(
+                overlay,
+                hit_color,
+                pygame.Rect(int(sx - self.radius), int(sy - self.radius), self.radius * 2, self.radius * 2),
+                1,
+            )
+            screen.blit(overlay, (0, 0))
+            return
         pygame.draw.circle(screen, self.color, (int(sx), int(sy)), self.radius)
+        hit_color = (255, 0, 0, 80)
+        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        pygame.draw.rect(
+            overlay,
+            hit_color,
+            pygame.Rect(int(sx - self.radius), int(sy - self.radius), self.radius * 2, self.radius * 2),
+            1,
+        )
+        screen.blit(overlay, (0, 0))
 
     def check_collision(self, player):
         if not self.alive or player.is_dead:

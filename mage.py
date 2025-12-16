@@ -1,6 +1,7 @@
 """Mage character: ranged-leaning fighter without a shield."""
 
 import os
+import pygame
 import config
 from projectile import Projectile
 from animation import Animation
@@ -28,6 +29,9 @@ class Mage(Player):
             "flip_on_left": False,  # Mage sprites face left by default; flip when facing right
         }
         super().__init__(x, y, controls=controls, name="Mage", ui_color=(90, 140, 255), character_config=cfg)
+        # Slight directional hitbox nudge
+        self.collision_directional_offset = 2
+        self.last_shot_target = (x, y)
         # Slightly wider cone for spell swipe feel
         self.attack_base_half_width = self.attack_range * 0.55
         # Softer dash than the rogue
@@ -85,6 +89,8 @@ class Mage(Player):
 
     def on_attack_started(self, dir_x, dir_y):
         """Fire a projectile in the aimed direction."""
+        # Remember where we aimed for debug hitbox
+        self.last_shot_target = (self.mouse_world_x, self.mouse_world_y)
         proj = Projectile(
             self.x,
             self.y,
@@ -111,3 +117,29 @@ class Mage(Player):
         )
         anim.reset()
         return anim
+
+    def get_collision_center(self):
+        """Offset hitbox slightly toward facing direction (left/right)."""
+        dx = 0
+        if self.facing_direction == "right":
+            dx = getattr(self, "collision_directional_offset", 0)
+        elif self.facing_direction == "left":
+            dx = -getattr(self, "collision_directional_offset", 0)
+        return (
+            self.x + dx,
+            self.y + getattr(self, "collision_offset_y", 0),
+        )
+
+    def draw_attack_hitbox(self, screen, camera, screen_x, screen_y):
+        """For mage, draw a small rectangle at the aimed point instead of triangle."""
+        if not self.is_attacking:
+            return
+        target_x, target_y = self.last_shot_target
+        tx, ty = camera.apply(target_x, target_y)
+        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        size = self.projectile_speed * 0 + 12  # constant size rectangle
+        rect = pygame.Rect(0, 0, size, size)
+        rect.center = (int(tx), int(ty))
+        pygame.draw.rect(overlay, (255, 200, 0, 80), rect)
+        pygame.draw.rect(overlay, (255, 150, 0, 180), rect, 2)
+        screen.blit(overlay, (0, 0))

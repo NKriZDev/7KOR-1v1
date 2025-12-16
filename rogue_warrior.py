@@ -28,8 +28,20 @@ class RogueWarrior(Player):
             "build_animations": self._build_animations,
         }
         super().__init__(x, y, controls=controls, name="Rogue Warrior", ui_color=(0, 200, 0), character_config=cfg)
-        # Keep hitbox centered; offsets remain zero so flipping stays symmetric.
-        self.collision_offset_x = 0
+        # Small directional offset so hitbox nudges in facing direction
+        self.collision_directional_offset = 2
+
+    def get_collision_center(self):
+        """Offset hitbox slightly toward facing direction (left/right)."""
+        dx = 0
+        if self.facing_direction == "right":
+            dx = self.collision_directional_offset
+        elif self.facing_direction == "left":
+            dx = -self.collision_directional_offset
+        return (
+            self.x + dx,
+            self.y + self.collision_offset_y,
+        )
 
     def _build_animations(self):
         """Load hero animations from disk."""
